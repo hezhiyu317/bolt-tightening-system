@@ -17,5 +17,3 @@ pcl:
     min_cluster_size: 50
     max_cluster_size: 1000
     input_in_millimeters: true
-sensors:
-  x1_discrete_input_addr: 20

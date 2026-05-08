@@ -1,5 +1,11 @@
-# 电机定义 — 12 台电机的 Modbus 寄存器基址映射
+# =============================================================================
+# 电机 & Modbus 寄存器定义
+# 来源: test_total/test_total/config.py + 变量表.csv (PLC 变量导出)
+# =============================================================================
+
+# ---- 12 台电机基址 ----------------------------------------------------------
 motors:
+  # 小龙门 (Small Gantry) — M1-M4
   - name: Z_motor
     base: 100
     enable_m: 1
@@ -16,6 +22,8 @@ motors:
     base: 196
     enable_m: 4
     group: Small Gantry
+
+  # 大龙门 (Big Gantry) — M5-M8
   - name: ZZ_motor
     base: 228
     enable_m: 5
@@ -32,6 +40,8 @@ motors:
     base: 324
     enable_m: 8
     group: Big Gantry
+
+  # 旋转电机 (Rotary) — M9-M12
   - name: SPF_motor
     base: 356
     enable_m: 9
@@ -49,29 +59,7 @@ motors:
     enable_m: 12
     group: Rotary
 
-# Modbus 寄存器偏移量（相对 base 地址）
-offsets:
-  reset_cmd: 1
-  stop_cmd: 2
-  home_cmd: 3
-  jog_f_cmd: 4
-  jog_b_cmd: 5
-  rel_cmd: 6
-  abs_cmd: 7
-  jog_vel_set: 3
-  rel_vel_set: 5
-  rel_pos_set: 7
-  abs_vel_set: 11
-  abs_pos_set: 13
-  acc_set: 18
-  dec_set: 20
-  act_pos: 23
-  act_vel: 25
-  act_tor: 27
-  status_word_offset: 30
-  is_powered_bit: 1
-
-# 龙门三坐标轴 → 电机名映射
+# ---- 龙门三坐标轴 → 电机名映射 ------------------------------------------------
 gantry:
   small:
     X: X_motor
@@ -83,3 +71,143 @@ gantry:
     Y_left: YLL_motor
     Y_right: YRR_motor
     Z: ZZ_motor
+
+# =============================================================================
+# 每电机 Modbus 寄存器偏移量 (相对 base 地址)
+# 格式: 变量名: 偏移
+# 来源: config.py 已验证 + 变量表.csv 补充命名
+# =============================================================================
+
+offsets:
+  # ---- 指令 (write) ---------------------------------------------------------
+  reset_cmd: 1      # 复位指令
+  stop_cmd: 2       # 停止指令
+  home_cmd: 3       # 回零指令
+  jog_f_cmd: 4      # 点动正向
+  jog_b_cmd: 5      # 点动反向
+  rel_cmd: 6        # 相对运动指令
+  abs_cmd: 7        # 绝对运动指令
+  power_cmd: ??     # 上电指令 (地址待确认)
+  reading: ??       # 读取指令 (地址待确认)
+  abs_dir: ??       # 绝对方向 (地址待确认)
+  im_stop_cmd: ??   # 立即停止 (地址待确认)
+
+  # ---- 运动参数 (write) -----------------------------------------------------
+  jog_vel_set: 3    # 点动速度设定
+  rel_vel_set: 5    # 相对速度设定
+  rel_pos_set: 7    # 相对位置设定
+  rel_tor_set: ??   # 相对扭矩设定 (地址待确认)
+  abs_vel_set: 11   # 绝对速度设定
+  abs_pos_set: 13   # 绝对位置设定
+  abs_tor_set: ??   # 绝对扭矩设定 (地址待确认)
+  acc_set: 18       # 加速度设定
+  dec_set: 20       # 减速度设定
+  home_pos: ??      # 零位位置 (地址待确认)
+  curve_type: ??    # 曲线类型 (地址待确认)
+
+  # ---- 反馈 (read) ----------------------------------------------------------
+  actl_pos: 23      # 实际位置
+  actl_vel: 25      # 实际速度
+  actl_tor: 27      # 实际扭矩
+
+  # ---- 状态字 (read) --------------------------------------------------------
+  status_word_offset: 30   # 状态字寄存器偏移
+  # 状态字位定义:
+  is_powered_bit: 1        # 上电
+  is_reseted_bit: ??       # 复位完成 (地址待确认)
+  is_stopped_bit: ??       # 已停止
+  is_homed_bit: ??         # 回零完成
+  is_busing_bit: ??        # 忙
+  homing_bit: ??           # 回零中
+  jogging_bit: ??          # 点动中
+  stopping_bit: ??         # 停止中
+  reseting_bit: ??         # 复位中
+  reading_bit: ??          # 读取中
+  fb_valid_bit: ??         # 反馈有效
+  cmd_aborted_bit: ??      # 指令终止
+  rel_m_done_bit: ??       # 相对运动完成
+  rel_m_ing_bit: ??        # 相对运动中
+  abs_m_done_bit: ??       # 绝对运动完成
+  abs_m_ing_bit: ??        # 绝对运动中
+
+  # ---- 错误字 (read) --------------------------------------------------------
+  err_id: ??               # 错误ID
+  abs_err: ??              # 绝对运动错误
+  home_err: ??             # 回零错误
+  im_stop_err: ??          # 急停错误
+  jog_err: ??              # 点动错误
+  power_err: ??            # 上电错误
+  reading_err: ??          # 读取错误
+  rel_err: ??              # 相对运动错误
+  reset_err: ??            # 复位错误
+
+# =============================================================================
+# 系统级寄存器 (非电机)
+# 来源: 变量表.csv — 地址需 PLC 文档确认
+# =============================================================================
+
+system_registers:
+  # ---- 齿轮耦合 (GearIn) ----------------------------------------------------
+  # 小龙门齿轮 B, 大龙门齿轮 C
+  gear:
+    cmd: ??          # GearIn_cmd — 齿轮耦合指令
+    done: ??         # InGear_done — 耦合完成
+    busy: ??         # Is_Gearing — 耦合中
+    aborted: ??      # GearIn_CmdAb — 耦合终止
+    err: ??          # GearIn_Err — 耦合错误
+    err_id: ??       # GearIn_ErrID — 错误码
+    # B/C 双齿轮变体:
+    done_b: ??       # 小龙门齿轮完成
+    done_c: ??       # 大龙门齿轮完成
+    busy_b: ??       # 小龙门齿轮耦合中
+    busy_c: ??       # 大龙门齿轮耦合中
+    aborted_b: ??    # 小龙门齿轮终止
+    aborted_c: ??    # 大龙门齿轮终止
+    err_b: ??        # 小龙门齿轮错误
+    err_c: ??        # 大龙门齿轮错误
+    err_id_b: ??     # 小龙门齿轮错误码
+    err_id_c: ??     # 大龙门齿轮错误码
+
+  # ---- 各轴位置指令 ---------------------------------------------------------
+  position_cmds:
+    X_P_Cmd: ??      # 小龙门 X 位置
+    Z_P_Cmd: ??      # 小龙门 Z 位置
+    YL_P_Cmd: ??     # 小龙门 Y 左位置
+    YR_P_Cmd: ??     # 小龙门 Y 右位置
+    XX_P_Cmd: ??     # 大龙门 X 位置
+    ZZ_P_Cmd: ??     # 大龙门 Z 位置
+    YLL_P_Cmd: ??    # 大龙门 Y 左位置
+    YRR_P_Cmd: ??    # 大龙门 Y 右位置
+    SPF_P_Cmd: ??    # 旋转 F 位置
+    SPT_P_Cmd: ??    # 旋转 T 位置
+    SPM_P_Cmd: ??    # 旋转 M 位置
+    SPC_P_Cmd: ??    # 旋转 C 位置
+
+  # ---- 拧紧枪 ---------------------------------------------------------------
+  gun:
+    start_lock: ??   # 启动锁定
+    reset: ??        # 枪复位
+    jog_forward: ??  # 枪正转 (gun_j_for)
+    jog_backward: ?? # 枪反转 (gun_j_back)
+
+  # ---- 拧紧轴转速 -----------------------------------------------------------
+  spin_speed: ??     # l_spin_set — 拧紧轴转速设定
+
+  # ---- 电磁阀 / 继电器 ------------------------------------------------------
+  relays:
+    r1v: ??           # 继电器/阀 1
+    r2v: ??           # 继电器/阀 2
+    r3v: ??           # 继电器/阀 3
+    r4v: ??           # 继电器/阀 4
+    r5v: ??           # 继电器/阀 5
+    r6v: ??           # 继电器/阀 6
+    r7v: ??           # 继电器/阀 7
+    r8v: ??           # 继电器/阀 8
+    brake: ??          # BRAKE — 刹车
+    reverse: ??        # REVERSE — 反转
+    tip: ??            # 拧紧头
+
+  # ---- 传感器 ---------------------------------------------------------------
+  sensors:
+    x1_discrete_input_addr: 20   # X1 传感器 (来源: config.py)
+    yuyu: ??                     # 预留 (来源: 变量表.csv)

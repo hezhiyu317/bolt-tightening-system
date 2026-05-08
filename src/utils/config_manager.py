@@ -120,7 +120,7 @@ class ConfigManager:
 
     @property
     def x1_sensor_addr(self) -> int:
-        return self.get("system.sensors.x1_discrete_input_addr", 20)
+        return self.get("motors.system_registers.sensors.x1_discrete_input_addr", 20)
 
     @property
     def gantry_mapping(self) -> dict:
@@ -129,6 +129,26 @@ class ConfigManager:
     @property
     def offsets(self) -> dict:
         return self.get("motors.offsets", {})
+
+    @property
+    def system_registers(self) -> dict:
+        return self.get("motors.system_registers", {})
+
+    @property
+    def gear_registers(self) -> dict:
+        return self.get("motors.system_registers.gear", {})
+
+    @property
+    def gun_registers(self) -> dict:
+        return self.get("motors.system_registers.gun", {})
+
+    @property
+    def relay_registers(self) -> dict:
+        return self.get("motors.system_registers.relays", {})
+
+    @property
+    def position_cmd_registers(self) -> dict:
+        return self.get("motors.system_registers.position_cmds", {})
 
 
 # 模块级单例
