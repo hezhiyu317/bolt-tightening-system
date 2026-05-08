@@ -1,0 +1,8 @@
+# 用户账号 — password_hash 为 SHA-256 哈希
+users:
+  - username: admin
+    password_hash: "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"  # admin
+    role: developer
+  - username: operator
+    password_hash: "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"  # password
+    role: user

@@ -1,0 +1,21 @@
+plc:
+  default_ip: 192.168.1.88
+  port: 502
+  poll_interval_ms: 100
+camera:
+  log_config: ../LogConfig-Client.yaml
+  temp_dir: ./temp_cam_data
+  2d_exposure_mode: FLASH
+  2d_exposure_time: 5000
+  3d_exposure_time: 30000
+pcl:
+  default_params:
+    plane_distance_threshold: 0.05
+    edge_search_radius: 2.0
+    edge_num_threads: 4
+    cluster_tolerance: 2.0
+    min_cluster_size: 50
+    max_cluster_size: 1000
+    input_in_millimeters: true
+sensors:
+  x1_discrete_input_addr: 20
