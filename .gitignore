@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# C++ build outputs
+build/
+*.exe
+*.pyd
+*.lib
+*.obj
+*.exp
+*.dll
+*.ilk
+*.pdb
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.cmake
+!CMakeLists.txt
+
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.recipe
+*.tlog/
+*.lastbuildstate
+
+# Point cloud temp data
+*.pcd
+temp_cam_data/
+
+# Logs (keep directory, ignore log files)
+logs/*.log*
+logs/*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Environment / secrets
+.env
+.env.local
+
+# Position / calibration temp files
+position.txt
+
+# Misc
+*.tmp
+*.bak
