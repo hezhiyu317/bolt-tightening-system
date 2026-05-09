@@ -210,7 +210,7 @@ class MotorWidget(QGroupBox):
                     self, "禁止操作", "龙门未同步！禁止操作 Y 轴电机。")
                 return
         addr = self._mc.base
-        offset = self._mc.register_addr(offset_key)
+        offset = self._mc.offset_of(offset_key)
         if offset is not None:
             self.write_requested.emit({
                 "type": "register_bit", "addr": addr,

@@ -73,7 +73,6 @@ class CameraService(QObject):
         self._streaming = False
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
-        self._log_initialized = False
         self._client_listener = None
         self._device_listener = None
         self._server_list: List[Any] = []
@@ -124,7 +123,7 @@ class CameraService(QObject):
     # ---- public API -----------------------------------------------------------
 
     def connect_camera(self):
-        """发现并连接相机，自动开启 2D 纹理流。"""
+        """发现并连接相机（后台线程，避免 SDK 与 Qt 事件循环冲突）。"""
         if self._connected:
             return
         if not _ALSON_AVAILABLE:
@@ -133,23 +132,27 @@ class CameraService(QObject):
             self.error_occurred.emit(msg)
             return
 
-        try:
-            if not self._log_initialized:
-                Client.init_log(self._log_config)  # noqa: F405
-                self._log_initialized = True
+        threading.Thread(target=self._connect_task, daemon=True).start()
 
-            server_list = Client.discovery()   # noqa: F405
-            if not server_list:
-                self.connection_status.emit(False, "未发现相机设备")
+    def _connect_task(self):
+        """后台线程：发现 + 连接相机全流程。"""
+        try:
+            Client.init_log(self._log_config)  # noqa: F405
+
+            server_info_list = Client.discovery()  # noqa: F405
+            if len(server_info_list) == 0:
+                self.connection_status.emit(False, "未发现任何相机设备")
                 return
 
-            server = server_list[0]
-            nic = server.get_server_network_card_info()
-            self._server_list = server_list
-            self._camera_ip = nic.get_ip()
+            server_info = server_info_list[0]
+            self._camera_ip = server_info.get_server_network_card_info().get_ip()
+            self._server_list = server_info_list
 
-            self._client = Client()            # noqa: F405
-            self._client.connect(self._camera_ip, nic.get_bind_port())
+            self._client = Client()  # noqa: F405
+            self._client.connect(
+                self._camera_ip,
+                server_info.get_server_network_card_info().get_bind_port(),
+            )
 
             if not self._client.is_connected():
                 self.connection_status.emit(False, "相机连接失败")
@@ -158,14 +161,13 @@ class CameraService(QObject):
             self._client.set_heartbeat_timeout(3000)
             self._device_controller = \
                 self._client.create_classic_device_controller()
+
+            self._register_listeners()
             self._device_controller.open()
+
             self._parameter_manager = \
                 self._client.create_device_parameter_manager()
 
-            # 注册事件监听器
-            self._register_listeners()
-
-            # 加载默认参数
             self.apply_default_parameters()
 
             self._connected = True
@@ -176,10 +178,9 @@ class CameraService(QObject):
             self.start_2d_stream()
 
         except Exception as e:
-            msg = f"相机初始化异常: {e}"
-            self.connection_status.emit(False, msg)
-            self.error_occurred.emit(msg)
-            app_logger.exception(msg)
+            self.connection_status.emit(False, f"相机初始化异常: {str(e)}")
+            self.error_occurred.emit(str(e))
+            app_logger.exception(str(e))
 
     def disconnect_camera(self):
         """断开相机连接，停止 2D 流。"""
@@ -269,6 +270,9 @@ class CameraService(QObject):
                 params_3d = config.get("system.camera.default_parameters.3d", {})
                 exp_array = params_3d.get("exposure_time_array", [30000])
                 for i, val in enumerate(exp_array):
+                    if i > 0:
+                        self._parameter_manager.add_array_element_for_current(
+                            PARAM_3D_EXPOSURE_ARRAY)
                     self._parameter_manager.update_current_integer_value(
                         f"{PARAM_3D_EXPOSURE_ARRAY}[{i}]", val,
                     )
@@ -287,15 +291,17 @@ class CameraService(QObject):
 
     # ---- discovery & parameters -----------------------------------------------
 
-    def discover_camera(self) -> List[Dict[str, str]]:
-        """发现可用相机设备（不连接）。返回 ip/port 字典列表。"""
+    def discover_camera(self):
+        """发现可用相机设备（后台线程）。结果通过 camera_discovered 信号发射。"""
         if not _ALSON_AVAILABLE:
             self.error_occurred.emit("AlsonClassicDevice SDK 未安装")
-            return []
+            return
+        threading.Thread(target=self._discover_task, daemon=True).start()
+
+    def _discover_task(self):
+        """后台线程：相机发现。"""
         try:
-            if not self._log_initialized:
-                Client.init_log(self._log_config)  # noqa: F405
-                self._log_initialized = True
+            Client.init_log(self._log_config)  # noqa: F405
             server_list = Client.discovery()  # noqa: F405
             self._server_list = server_list
             result = []
@@ -303,12 +309,10 @@ class CameraService(QObject):
                 nic = s.get_server_network_card_info()
                 result.append({"ip": nic.get_ip(), "port": nic.get_bind_port()})
             self.camera_discovered.emit(result)
-            return result
         except Exception as e:
             msg = f"相机发现失败: {e}"
             self.error_occurred.emit(msg)
             app_logger.exception(msg)
-            return []
 
     def apply_default_parameters(self):
         """从 system.yaml 加载默认参数并写入相机。"""
@@ -346,6 +350,9 @@ class CameraService(QObject):
 
                 params_3d = config.get("system.camera.default_parameters.3d", {})
                 for i, val in enumerate(params_3d.get("exposure_time_array", [])):
+                    if i > 0:
+                        self._parameter_manager.add_array_element_for_current(
+                            PARAM_3D_EXPOSURE_ARRAY)
                     self._parameter_manager.update_current_integer_value(
                         f"{PARAM_3D_EXPOSURE_ARRAY}[{i}]", val)
                 if params_3d.get("gain") is not None:
@@ -445,22 +452,15 @@ class CameraService(QObject):
                 self.error_occurred.emit(f"添加曝光层级失败: {e}")
 
     def remove_exposure_element(self, index: int):
-        """移除指定索引的曝光时间数组元素。通过重置数组实现。"""
+        """移除指定索引的曝光时间数组元素。通过 SDK 节点 API 实现。"""
         if not self._parameter_manager or index < 0:
             return
         with self._lock:
             try:
-                # SDK 没有直接删除数组元素的方法，
-                # 通过重置当前 key 再重新设置保留的元素来实现
-                current_values = self._get_exposure_array_values()
-                if index >= len(current_values):
-                    return
-                new_values = [v for i, v in enumerate(current_values) if i != index]
-                self._parameter_manager.reset_current_value_by_key(
+                node = self._parameter_manager.get_array_parameter_node(
                     PARAM_3D_EXPOSURE_ARRAY)
-                for i, val in enumerate(new_values):
-                    self._parameter_manager.update_current_integer_value(
-                        f"{PARAM_3D_EXPOSURE_ARRAY}[{i}]", val)
+                node.delete_element_by_index(index)
+                new_values = self._get_exposure_array_values()
                 self.camera_params_changed.emit(PARAM_3D_EXPOSURE_ARRAY, new_values)
             except Exception as e:
                 self.error_occurred.emit(f"删除曝光层级失败: {e}")

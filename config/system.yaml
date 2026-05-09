@@ -3,7 +3,7 @@ plc:
   port: 502
   poll_interval_ms: 100
 camera:
-  log_config: ../LogConfig-Client.yaml
+  log_config: ./nonexistent.yaml  # 不加载 LogConfig，避免 SDK 自行启动服务器与已有服务器冲突
   temp_dir: ./temp_cam_data
   default_parameters:
     2d:

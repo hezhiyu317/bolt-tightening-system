@@ -56,6 +56,20 @@ class MotorConfig:
             return None
         return self.base + offset
 
+    def offset_of(self, key: str) -> Optional[int]:
+        """返回偏移名的原始偏移量（不加 base），用于位操作等场景。
+
+        Args:
+            key: 偏移名，如 "abs_cmd", "jog_f_cmd"。
+
+        Returns:
+            原始偏移量（如 7），若未知则返回 None。
+        """
+        offset = self._offsets.get(key)
+        if offset is None or not isinstance(offset, int):
+            return None
+        return offset
+
     def all_register_map(self) -> Dict[str, Optional[int]]:
         """返回该电机所有已知寄存器的 {偏移名: 绝对地址} 映射。
 

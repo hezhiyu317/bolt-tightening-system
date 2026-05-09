@@ -329,7 +329,7 @@ class MotorControlPage(QWidget):
                 continue
             self._plc.add_write_task(
                 "register_bit", mc.base, 1,
-                bit=mc.register_addr("abs_cmd"))
+                bit=mc.offset_of("abs_cmd"))
             bases.append(mc.base)
 
         def release():
@@ -340,7 +340,7 @@ class MotorControlPage(QWidget):
                 if mc_release:
                     self._plc.add_write_task(
                         "register_bit", b, 0,
-                        bit=mc_release.register_addr("abs_cmd"))
+                        bit=mc_release.offset_of("abs_cmd"))
 
         QTimer.singleShot(200, release)
 

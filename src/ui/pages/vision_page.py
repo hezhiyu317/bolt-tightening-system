@@ -3,7 +3,7 @@
 根据 Camera_Parameters_Specification.txt 设计参数面板。
 """
 
-from typing import List, Optional
+from typing import Optional
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -307,7 +307,6 @@ class _ThreeDParamsWidget(QWidget):
         super().__init__(parent)
         self._camera = camera
         self._rows: dict = {}
-        self._exposure_rows: List[QHBoxLayout] = []
         self._exposure_container: Optional[QVBoxLayout] = None
         self._setup_ui()
 
@@ -329,17 +328,14 @@ class _ThreeDParamsWidget(QWidget):
         self._exposure_container.setSpacing(2)
         layout.addLayout(self._exposure_container)
 
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 2, 0, 2)
-        add_btn = QPushButton("+ 添加曝光层级")
-        add_btn.setStyleSheet(QSS_SECONDARY_BUTTON)
-        add_btn.clicked.connect(self._add_exposure)
-        btn_row.addWidget(add_btn)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-
-        # 初始曝光层级
-        self._rebuild_exposure_rows()
+        # 两个固定曝光时间输入口（从 config 读取默认值）
+        try:
+            from src.utils.config_manager import config as cfg
+            exp_vals = cfg.get("system.camera.default_parameters.3d.exposure_time_array", [20000, 6000])
+        except Exception:
+            exp_vals = [20000, 6000]
+        self._rows["exp0"] = self._build_exposure_row(0, exp_vals[0] if len(exp_vals) > 0 else 20000)
+        self._rows["exp1"] = self._build_exposure_row(1, exp_vals[1] if len(exp_vals) > 1 else 6000)
 
         # ---- 增益 ----
         gain_spin = QSpinBox()
@@ -480,27 +476,10 @@ class _ThreeDParamsWidget(QWidget):
 
         layout.addStretch()
 
-    # ---- multi-exposure ------------------------------------------------------
+    # ---- multi-exposure (2-fixed) --------------------------------------------
 
-    def _rebuild_exposure_rows(self):
-        """从 SDK 读取当前曝光数组并重建 UI。"""
-        if not self._exposure_container:
-            return
-        # 清空
-        while self._exposure_container.count():
-            item = self._exposure_container.takeAt(0)
-            if item.layout():
-                while item.layout().count():
-                    child = item.layout().takeAt(0)
-                    if child.widget():
-                        child.widget().deleteLater()
-        self._exposure_rows.clear()
-
-        values = self._camera._get_exposure_array_values()
-        for i, val in enumerate(values):
-            self._add_exposure_row(i, val)
-
-    def _add_exposure_row(self, index: int, value: int = 30000):
+    def _build_exposure_row(self, index: int, value: int):
+        """构建单个曝光时间输入行。"""
         row_layout = QHBoxLayout()
         row_layout.setSpacing(4)
 
@@ -517,7 +496,8 @@ class _ThreeDParamsWidget(QWidget):
         spin.setValue(value)
         spin.setStyleSheet(_TwoDParamsWidget._spin_style())
         spin.valueChanged.connect(
-            lambda v, idx=index: self._on_exposure_value_changed(idx, v)
+            lambda v, idx=index: self._camera.write_int_param(
+                f"{PARAM_3D_EXPOSURE_ARRAY}[{idx}]", v)
         )
         row_layout.addWidget(spin, stretch=1)
 
@@ -525,35 +505,8 @@ class _ThreeDParamsWidget(QWidget):
         unit.setStyleSheet(f"color: {TEXT_DIM}; font-size: {FONT_SIZE_SM}px;")
         row_layout.addWidget(unit)
 
-        remove_btn = QPushButton("−")
-        remove_btn.setFixedWidth(28)
-        remove_btn.setStyleSheet(
-            f"QPushButton {{"
-            f"  color: {RED_ALERT}; border: 1px solid {RED_ALERT};"
-            f"  border-radius: 3px; padding: 1px;"
-            f"  font-size: 14px; font-weight: bold;"
-            f"}}"
-            f"QPushButton:hover {{ background-color: {RED_ALERT}; color: #FFF; }}"
-        )
-        remove_btn.clicked.connect(lambda checked, idx=index: self._remove_exposure(idx))
-        row_layout.addWidget(remove_btn)
-
         self._exposure_container.addLayout(row_layout)
-        self._exposure_rows.append(row_layout)
-
-    def _add_exposure(self):
-        self._camera.add_exposure_element()
-        size = self._camera.get_exposure_array_size()
-        self._add_exposure_row(size - 1, 30000)
-
-    def _remove_exposure(self, index: int):
-        self._camera.remove_exposure_element(index)
-        self._rebuild_exposure_rows()
-
-    def _on_exposure_value_changed(self, index: int, value: int):
-        self._camera.write_int_param(
-            f"{PARAM_3D_EXPOSURE_ARRAY}[{index}]", value
-        )
+        return spin
 
     # ---- hole filling sync ---------------------------------------------------
 
@@ -1002,9 +955,13 @@ class VisionPage(QWidget):
             if "depth_upper" in rows:
                 rows["depth_upper"].setValue(
                     params_3d.get("depth_range_upper", 350))
-            # 曝光数组
-            if self._tab_3d._exposure_container:
-                self._tab_3d._rebuild_exposure_rows()
+            # 曝光数组 — 直接更新两个固定输入框
+            exp_array = params_3d.get("exposure_time_array", [20000, 6000])
+            rows3d = self._tab_3d._rows
+            if "exp0" in rows3d:
+                rows3d["exp0"].setValue(exp_array[0] if len(exp_array) > 0 else 20000)
+            if "exp1" in rows3d:
+                rows3d["exp1"].setValue(exp_array[1] if len(exp_array) > 1 else 6000)
 
         self._status_label.setText("默认参数已加载")
         self._status_label.setStyleSheet(
