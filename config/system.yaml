@@ -5,9 +5,29 @@ plc:
 camera:
   log_config: ../LogConfig-Client.yaml
   temp_dir: ./temp_cam_data
-  2d_exposure_mode: FLASH
-  2d_exposure_time: 5000
-  3d_exposure_time: 30000
+  default_parameters:
+    2d:
+      exposure_mode: FLASH
+      exposure_time: 5000
+      gain: 1
+      gamma: 1.0
+      fast_hdr: false
+      gray_value_lower: 0
+      gray_value_upper: 255
+    3d:
+      exposure_time_array:
+        - 20000
+        - 6000
+      gain: 1
+      light_engine_brightness: 800
+      enhance_mode: true
+      denoise_mode: true
+      hole_filling: 0
+      filter_mode: HIGH
+      edge_protection: true
+      decode_threshold: 8
+      depth_range_lower: 250
+      depth_range_upper: 350
 pcl:
   default_params:
     plane_distance_threshold: 0.05

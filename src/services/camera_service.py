@@ -1,0 +1,546 @@
+"""Alson 结构光光栅相机服务 — 2D 纹理流 + 3D 点云采集 + 参数管理。
+
+重构自 test_total/test_total/camera_worker.py。
+后台线程采集 2D 图像（~20 FPS），支持单次 3D 点云触发采图。
+2D/3D 互斥：3D 采集时暂停 2D 流，完成后自动恢复。
+提供参数读写接口供 VisionPage 调用。
+"""
+
+import os
+import threading
+import time
+from typing import Any, Dict, List, Optional
+
+from PyQt5.QtCore import QObject, pyqtSignal
+
+from src.utils.config_manager import config
+from src.utils.app_logger import app_logger
+from src.models.app_state import app_state
+
+try:
+    from AlsonClassicDevice import *  # noqa: F403
+    _ALSON_AVAILABLE = True
+except ImportError:
+    _ALSON_AVAILABLE = False
+
+# SDK 参数路径常量，避免字符串拼写错误
+PARAM_2D_EXPOSURE_MODE = "2dParameters.exposureMode"
+PARAM_2D_EXPOSURE_TIME = "2dParameters.exposureTime"
+PARAM_2D_GAIN = "2dParameters.gain"
+PARAM_2D_GAMMA = "2dParameters.gamma"
+PARAM_2D_FAST_HDR = "2dParameters.fastHdr"
+PARAM_2D_GRAY_LOWER = "2dParameters.grayValueRange.lowerLimit"
+PARAM_2D_GRAY_UPPER = "2dParameters.grayValueRange.upperLimit"
+PARAM_3D_EXPOSURE_ARRAY = "3dParameters.exposureTimeArray"
+PARAM_3D_GAIN = "3dParameters.gain"
+PARAM_3D_BRIGHTNESS = "3dParameters.lightEngineBrightness"
+PARAM_3D_ENHANCE = "3dParameters.enhanceMode"
+PARAM_3D_DENOISE = "3dParameters.denoiseMode"
+PARAM_3D_HOLE_FILLING = "3dParameters.holeFilling"
+PARAM_3D_FILTER_MODE = "3dParameters.filterMode"
+PARAM_3D_EDGE_PROTECTION = "3dParameters.edgeProtection"
+PARAM_3D_DECODE_THRESHOLD = "3dParameters.decodeThreshold"
+PARAM_3D_DEPTH_LOWER = "3dParameters.depthRange.lowerLimit"
+PARAM_3D_DEPTH_UPPER = "3dParameters.depthRange.upperLimit"
+
+
+class CameraService(QObject):
+    """Alson 结构光光栅相机服务。
+
+    Usage:
+        camera = CameraService()
+        camera.connection_status.connect(on_conn)
+        camera.image_grabbed.connect(on_2d)
+        camera.point_cloud_grabbed.connect(on_3d)
+        camera.connect_camera()
+    """
+
+    connection_status = pyqtSignal(bool, str)    # (connected, message)
+    image_grabbed = pyqtSignal(str)              # 2D BMP 文件路径
+    point_cloud_grabbed = pyqtSignal(str)        # 3D PCD 文件路径
+    error_occurred = pyqtSignal(str)             # 错误描述
+    camera_discovered = pyqtSignal(list)          # server_info 字典列表
+    camera_params_changed = pyqtSignal(str, object)  # (param_path, new_value)
+    device_exception = pyqtSignal(str)            # 设备硬件异常描述
+    client_disconnected = pyqtSignal(str)         # 通信异常断开原因
+
+    def __init__(self, parent: QObject = None):
+        super().__init__(parent)
+        self._client = None
+        self._device_controller = None
+        self._parameter_manager = None
+        self._connected = False
+        self._streaming = False
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._log_initialized = False
+        self._client_listener = None
+        self._device_listener = None
+        self._server_list: List[Any] = []
+
+        # 从 system.yaml 读取相机参数
+        cfg = config.camera_config
+        self._temp_dir = cfg.get("temp_dir", "./temp_cam_data")
+        self._log_config = cfg.get("log_config", "../LogConfig-Client.yaml")
+
+        os.makedirs(self._temp_dir, exist_ok=True)
+
+        if not _ALSON_AVAILABLE:
+            app_logger.warning("AlsonClassicDevice SDK 未安装，相机功能不可用")
+
+    # ---- event listeners (internal) -------------------------------------------
+
+    def _register_listeners(self):
+        """注册客户端和设备事件监听器。连接后调用。"""
+        if not _ALSON_AVAILABLE:
+            return
+        self._client_listener = _CameraClientEventListener(self)
+        self._client.set_client_event_listener(self._client_listener)
+        self._device_listener = _CameraDeviceEventListener(self)
+        self._device_controller.set_device_event_listener(self._device_listener)
+
+    def _unregister_listeners(self):
+        """清除事件监听器。断开前调用。"""
+        self._client_listener = None
+        self._device_listener = None
+
+    def _on_client_disconnected(self):
+        """客户端通信异常断开回调。"""
+        self._connected = False
+        self._streaming = False
+        app_state.camera_online = False
+        reason = "相机通信异常断开"
+        self.client_disconnected.emit(reason)
+        self.connection_status.emit(False, reason)
+        app_logger.error(reason)
+
+    def _on_device_exception(self):
+        """设备硬件异常回调。"""
+        msg = "相机硬件异常"
+        self.device_exception.emit(msg)
+        self.error_occurred.emit(msg)
+        app_logger.error(msg)
+
+    # ---- public API -----------------------------------------------------------
+
+    def connect_camera(self):
+        """发现并连接相机，自动开启 2D 纹理流。"""
+        if self._connected:
+            return
+        if not _ALSON_AVAILABLE:
+            msg = "AlsonClassicDevice SDK 未安装，无法连接相机"
+            self.connection_status.emit(False, msg)
+            self.error_occurred.emit(msg)
+            return
+
+        try:
+            if not self._log_initialized:
+                Client.init_log(self._log_config)  # noqa: F405
+                self._log_initialized = True
+
+            server_list = Client.discovery()   # noqa: F405
+            if not server_list:
+                self.connection_status.emit(False, "未发现相机设备")
+                return
+
+            server = server_list[0]
+            nic = server.get_server_network_card_info()
+            self._server_list = server_list
+            self._camera_ip = nic.get_ip()
+
+            self._client = Client()            # noqa: F405
+            self._client.connect(self._camera_ip, nic.get_bind_port())
+
+            if not self._client.is_connected():
+                self.connection_status.emit(False, "相机连接失败")
+                return
+
+            self._client.set_heartbeat_timeout(3000)
+            self._device_controller = \
+                self._client.create_classic_device_controller()
+            self._device_controller.open()
+            self._parameter_manager = \
+                self._client.create_device_parameter_manager()
+
+            # 注册事件监听器
+            self._register_listeners()
+
+            # 加载默认参数
+            self.apply_default_parameters()
+
+            self._connected = True
+            self.connection_status.emit(True, "相机连接成功")
+            app_state.camera_online = True
+            app_logger.info(f"相机已连接: {self._camera_ip}")
+
+            self.start_2d_stream()
+
+        except Exception as e:
+            msg = f"相机初始化异常: {e}"
+            self.connection_status.emit(False, msg)
+            self.error_occurred.emit(msg)
+            app_logger.exception(msg)
+
+    def disconnect_camera(self):
+        """断开相机连接，停止 2D 流。"""
+        self._streaming = False
+        time.sleep(0.2)
+
+        self._unregister_listeners()
+
+        try:
+            if self._device_controller:
+                self._device_controller.close()
+            if self._client:
+                self._client.disconnect()
+        except Exception as e:
+            app_logger.warning(f"关闭相机异常: {e}")
+
+        self._connected = False
+        self._client = None
+        self._device_controller = None
+        self._parameter_manager = None
+        self._server_list = []
+        self.connection_status.emit(False, "相机已断开")
+        app_logger.info("相机已断开")
+        app_state.camera_online = False
+
+    # ---- 2D streaming ---------------------------------------------------------
+
+    def start_2d_stream(self):
+        """启动 2D 纹理图像采集线程（~20 FPS）。"""
+        if not self._connected or self._streaming:
+            return
+        self._streaming = True
+        self._thread = threading.Thread(target=self._stream_loop, daemon=True)
+        self._thread.start()
+
+    def stop_2d_stream(self):
+        """停止 2D 采集线程。"""
+        self._streaming = False
+
+    def _stream_loop(self):
+        """2D 图像采集主循环。"""
+        try:
+            self._parameter_manager.reset_current_value()
+            params_cfg = config.get("system.camera.default_parameters.2d", {})
+            mode = params_cfg.get("exposure_mode", "FLASH")
+            exp_time = params_cfg.get("exposure_time", 5000)
+            self._parameter_manager.update_current_enumeration_value(
+                PARAM_2D_EXPOSURE_MODE, mode,
+            )
+            self._parameter_manager.update_current_integer_value(
+                PARAM_2D_EXPOSURE_TIME, exp_time,
+            )
+        except Exception as e:
+            app_logger.error(f"设置 2D 参数失败: {e}")
+
+        img_path = os.path.join(self._temp_dir, "temp_2d_stream.bmp")
+
+        while self._streaming:
+            with self._lock:
+                try:
+                    texture = self._device_controller.grab_texture_image()
+                    texture.save(img_path)
+                    self.image_grabbed.emit(img_path)
+                except Exception as e:
+                    app_logger.error(f"获取 2D 图像失败: {e}")
+            time.sleep(0.05)
+
+    # ---- 3D capture -----------------------------------------------------------
+
+    def trigger_3d_capture(self):
+        """触发单次 3D 点云采集。
+
+        暂停 2D 流 → 采集 3D → 恢复 2D 流（如之前开启）。
+        """
+        if not self._connected:
+            return
+        threading.Thread(target=self._capture_3d_task, daemon=True).start()
+
+    def _capture_3d_task(self):
+        was_streaming = self._streaming
+        self._streaming = False
+        time.sleep(0.1)
+
+        with self._lock:
+            try:
+                self._parameter_manager.reset_current_value()
+                params_3d = config.get("system.camera.default_parameters.3d", {})
+                exp_array = params_3d.get("exposure_time_array", [30000])
+                for i, val in enumerate(exp_array):
+                    self._parameter_manager.update_current_integer_value(
+                        f"{PARAM_3D_EXPOSURE_ARRAY}[{i}]", val,
+                    )
+                pc_path = os.path.join(self._temp_dir, "temp_3d_cloud.pcd")
+                point_cloud = self._device_controller.grab_point_cloud()
+                point_cloud.save(pc_path)
+                self.point_cloud_grabbed.emit(pc_path)
+                app_logger.info(f"3D 点云已保存: {pc_path}")
+            except Exception as e:
+                msg = f"采集 3D 点云异常: {e}"
+                self.error_occurred.emit(msg)
+                app_logger.exception(msg)
+
+        if was_streaming:
+            self.start_2d_stream()
+
+    # ---- discovery & parameters -----------------------------------------------
+
+    def discover_camera(self) -> List[Dict[str, str]]:
+        """发现可用相机设备（不连接）。返回 ip/port 字典列表。"""
+        if not _ALSON_AVAILABLE:
+            self.error_occurred.emit("AlsonClassicDevice SDK 未安装")
+            return []
+        try:
+            if not self._log_initialized:
+                Client.init_log(self._log_config)  # noqa: F405
+                self._log_initialized = True
+            server_list = Client.discovery()  # noqa: F405
+            self._server_list = server_list
+            result = []
+            for s in server_list:
+                nic = s.get_server_network_card_info()
+                result.append({"ip": nic.get_ip(), "port": nic.get_bind_port()})
+            self.camera_discovered.emit(result)
+            return result
+        except Exception as e:
+            msg = f"相机发现失败: {e}"
+            self.error_occurred.emit(msg)
+            app_logger.exception(msg)
+            return []
+
+    def apply_default_parameters(self):
+        """从 system.yaml 加载默认参数并写入相机。"""
+        if not self._parameter_manager:
+            return
+        with self._lock:
+            try:
+                self._parameter_manager.reset_current_value()
+            except Exception:
+                pass
+
+            try:
+                params_2d = config.get("system.camera.default_parameters.2d", {})
+                if params_2d.get("exposure_mode"):
+                    self._parameter_manager.update_current_enumeration_value(
+                        PARAM_2D_EXPOSURE_MODE, params_2d["exposure_mode"])
+                if params_2d.get("exposure_time"):
+                    self._parameter_manager.update_current_integer_value(
+                        PARAM_2D_EXPOSURE_TIME, params_2d["exposure_time"])
+                if params_2d.get("gain") is not None:
+                    self._parameter_manager.update_current_integer_value(
+                        PARAM_2D_GAIN, params_2d["gain"])
+                if params_2d.get("gamma") is not None:
+                    self._parameter_manager.update_current_float_value(
+                        PARAM_2D_GAMMA, params_2d["gamma"])
+                if params_2d.get("fast_hdr") is not None:
+                    self._parameter_manager.update_current_boolean_value(
+                        PARAM_2D_FAST_HDR, params_2d["fast_hdr"])
+                if params_2d.get("gray_value_lower") is not None:
+                    self._parameter_manager.update_current_integer_value(
+                        PARAM_2D_GRAY_LOWER, params_2d["gray_value_lower"])
+                if params_2d.get("gray_value_upper") is not None:
+                    self._parameter_manager.update_current_integer_value(
+                        PARAM_2D_GRAY_UPPER, params_2d["gray_value_upper"])
+
+                params_3d = config.get("system.camera.default_parameters.3d", {})
+                for i, val in enumerate(params_3d.get("exposure_time_array", [])):
+                    self._parameter_manager.update_current_integer_value(
+                        f"{PARAM_3D_EXPOSURE_ARRAY}[{i}]", val)
+                if params_3d.get("gain") is not None:
+                    self._parameter_manager.update_current_integer_value(
+                        PARAM_3D_GAIN, params_3d["gain"])
+                if params_3d.get("light_engine_brightness") is not None:
+                    self._parameter_manager.update_current_integer_value(
+                        PARAM_3D_BRIGHTNESS, params_3d["light_engine_brightness"])
+                if params_3d.get("enhance_mode") is not None:
+                    self._parameter_manager.update_current_boolean_value(
+                        PARAM_3D_ENHANCE, params_3d["enhance_mode"])
+                if params_3d.get("denoise_mode") is not None:
+                    self._parameter_manager.update_current_boolean_value(
+                        PARAM_3D_DENOISE, params_3d["denoise_mode"])
+                if params_3d.get("hole_filling") is not None:
+                    self._parameter_manager.update_current_integer_value(
+                        PARAM_3D_HOLE_FILLING, params_3d["hole_filling"])
+                if params_3d.get("filter_mode"):
+                    self._parameter_manager.update_current_enumeration_value(
+                        PARAM_3D_FILTER_MODE, params_3d["filter_mode"])
+                if params_3d.get("edge_protection") is not None:
+                    self._parameter_manager.update_current_boolean_value(
+                        PARAM_3D_EDGE_PROTECTION, params_3d["edge_protection"])
+                if params_3d.get("decode_threshold") is not None:
+                    self._parameter_manager.update_current_integer_value(
+                        PARAM_3D_DECODE_THRESHOLD, params_3d["decode_threshold"])
+                if params_3d.get("depth_range_lower") is not None:
+                    self._parameter_manager.update_current_integer_value(
+                        PARAM_3D_DEPTH_LOWER, params_3d["depth_range_lower"])
+                if params_3d.get("depth_range_upper") is not None:
+                    self._parameter_manager.update_current_integer_value(
+                        PARAM_3D_DEPTH_UPPER, params_3d["depth_range_upper"])
+            except Exception as e:
+                app_logger.warning(f"应用默认参数异常: {e}")
+
+    # ---- parameter write helpers ----------------------------------------------
+
+    def write_int_param(self, path: str, value: int):
+        """写入整数参数。"""
+        if not self._parameter_manager:
+            return
+        with self._lock:
+            try:
+                self._parameter_manager.update_current_integer_value(path, value)
+                self.camera_params_changed.emit(path, value)
+            except Exception as e:
+                msg = f"写整数参数失败 {path}={value}: {e}"
+                self.error_occurred.emit(msg)
+
+    def write_float_param(self, path: str, value: float):
+        """写入浮点参数。"""
+        if not self._parameter_manager:
+            return
+        with self._lock:
+            try:
+                self._parameter_manager.update_current_float_value(path, value)
+                self.camera_params_changed.emit(path, value)
+            except Exception as e:
+                msg = f"写浮点参数失败 {path}={value}: {e}"
+                self.error_occurred.emit(msg)
+
+    def write_enum_param(self, path: str, value: str):
+        """写入枚举参数。"""
+        if not self._parameter_manager:
+            return
+        with self._lock:
+            try:
+                self._parameter_manager.update_current_enumeration_value(path, value)
+                self.camera_params_changed.emit(path, value)
+            except Exception as e:
+                msg = f"写枚举参数失败 {path}={value}: {e}"
+                self.error_occurred.emit(msg)
+
+    def write_bool_param(self, path: str, value: bool):
+        """写入布尔参数。"""
+        if not self._parameter_manager:
+            return
+        with self._lock:
+            try:
+                self._parameter_manager.update_current_boolean_value(path, value)
+                self.camera_params_changed.emit(path, value)
+            except Exception as e:
+                msg = f"写布尔参数失败 {path}={value}: {e}"
+                self.error_occurred.emit(msg)
+
+    # ---- exposure array management --------------------------------------------
+
+    def add_exposure_element(self):
+        """向 3D 曝光时间数组追加一个元素。"""
+        if not self._parameter_manager:
+            return
+        with self._lock:
+            try:
+                self._parameter_manager.add_array_element_for_current(
+                    PARAM_3D_EXPOSURE_ARRAY)
+            except Exception as e:
+                self.error_occurred.emit(f"添加曝光层级失败: {e}")
+
+    def remove_exposure_element(self, index: int):
+        """移除指定索引的曝光时间数组元素。通过重置数组实现。"""
+        if not self._parameter_manager or index < 0:
+            return
+        with self._lock:
+            try:
+                # SDK 没有直接删除数组元素的方法，
+                # 通过重置当前 key 再重新设置保留的元素来实现
+                current_values = self._get_exposure_array_values()
+                if index >= len(current_values):
+                    return
+                new_values = [v for i, v in enumerate(current_values) if i != index]
+                self._parameter_manager.reset_current_value_by_key(
+                    PARAM_3D_EXPOSURE_ARRAY)
+                for i, val in enumerate(new_values):
+                    self._parameter_manager.update_current_integer_value(
+                        f"{PARAM_3D_EXPOSURE_ARRAY}[{i}]", val)
+                self.camera_params_changed.emit(PARAM_3D_EXPOSURE_ARRAY, new_values)
+            except Exception as e:
+                self.error_occurred.emit(f"删除曝光层级失败: {e}")
+
+    def get_exposure_array_size(self) -> int:
+        """返回当前曝光时间数组大小。"""
+        return len(self._get_exposure_array_values())
+
+    def _get_exposure_array_values(self) -> List[int]:
+        """读取当前曝光时间数组所有值。"""
+        if not self._parameter_manager:
+            return []
+        try:
+            # SDK 没有直接的 get_array_size 方法，通过试探索引读取
+            values = []
+            for i in range(5):  # 最多 5 组曝光
+                try:
+                    val = self._parameter_manager.get_current_integer_value(
+                        f"{PARAM_3D_EXPOSURE_ARRAY}[{i}]")
+                    values.append(val)
+                except Exception:
+                    break
+            return values
+        except Exception:
+            return []
+
+    # ---- properties -----------------------------------------------------------
+
+    @property
+    def parameter_manager(self):
+        """公开参数管理器供 VisionPage 直接读取参数。"""
+        return self._parameter_manager
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    @property
+    def is_streaming(self) -> bool:
+        return self._streaming
+
+    @property
+    def camera_ip(self) -> str:
+        return getattr(self, "_camera_ip", "")
+
+
+# ---- internal event listener classes -----------------------------------------
+
+
+class _CameraClientEventListener:
+    """内部客户端事件监听器 — 通信异常断开通知。"""
+
+    def __init__(self, service: "CameraService"):
+        super().__init__()
+        self._service = service
+
+    def on_disconnected_by_exception(self):
+        self._service._on_client_disconnected()
+
+
+class _CameraDeviceEventListener:
+    """内部设备事件监听器 — 硬件异常通知。"""
+
+    def __init__(self, service: "CameraService"):
+        super().__init__()
+        self._service = service
+
+    def on_device_exception(self):
+        self._service._on_device_exception()
+
+
+# 让监听器类继承 SDK 基类（如果可用）
+if _ALSON_AVAILABLE:
+    _CameraClientEventListener = type(
+        "_CameraClientEventListener",
+        (_CameraClientEventListener, AlsonBaseClientEventListener),
+        {},
+    )
+    _CameraDeviceEventListener = type(
+        "_CameraDeviceEventListener",
+        (_CameraDeviceEventListener, AlsonClassicDeviceEventListener),
+        {},
+    )
