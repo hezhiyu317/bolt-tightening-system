@@ -1,11 +1,12 @@
 """三坐标平台页面 — 电机控制 + 龙门三坐标运动 + 点位管理。
 
 重构自 test_total/test_total/main.py create_motor_tab / create_integrated_tab。
-舍弃 YR / YRR 电机。
+舍弃 YR / YRR 电机。统一加速度/减速度全局下发。
 """
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
+    QDoubleSpinBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -25,7 +26,7 @@ from PyQt5.QtWidgets import QAbstractItemView
 from src.models.motor_config import MotorConfig, get_motor_names_by_group
 from src.services.plc_service import PlcService
 from src.ui.styles import (
-    BG_DARK,
+    BG_BASE,
     BG_PANEL,
     BLUE_FUNC,
     BORDER_CARD,
@@ -34,6 +35,7 @@ from src.ui.styles import (
     FONT_MONO,
     FONT_SIZE_SM,
     GREEN_STATUS,
+    QSS_PRIMARY_BUTTON,
     RED_ALERT,
     TEXT_DIM,
     TEXT_PRIMARY,
@@ -60,6 +62,8 @@ class MotorControlPage(QWidget):
         self._coord_inputs: dict[str, dict[str, QLineEdit]] = {}
         self._point_lists: dict[str, list] = {"small": [], "big": []}
         self._point_tables: dict[str, QTableWidget] = {}
+        self._global_accel_spin: QDoubleSpinBox = None
+        self._global_decel_spin: QDoubleSpinBox = None
 
         self._setup_ui()
         self._wire_signals()
@@ -73,35 +77,91 @@ class MotorControlPage(QWidget):
         self._tabs = QTabWidget()
         self._tabs.setStyleSheet(self._tab_style())
 
-        # 小龙门
-        self._tabs.addTab(
-            self._build_motor_grid("Small Gantry"), "小龙门 (Z / X / YL)")
+        # Tab 0: 全部电机 (统一参数 + 2x3 网格)
+        self._tabs.addTab(self._build_all_motors_tab(), "全部电机 (6轴)")
 
-        # 大龙门
-        self._tabs.addTab(
-            self._build_motor_grid("Big Gantry"), "大龙门 (ZZ / XX / YLL)")
-
-        # 坐标运动
+        # Tab 1: 坐标运动
         self._tabs.addTab(self._build_integrated_tab(), "坐标运动")
 
         layout.addWidget(self._tabs)
 
-    def _build_motor_grid(self, group: str) -> QWidget:
-        """构建一组电机的 3 列网格。"""
+    def _build_all_motors_tab(self) -> QWidget:
+        """构建统一参数 + 2x3 电机网格页面。"""
         w = QWidget()
-        layout = QGridLayout(w)
-        layout.setSpacing(8)
+        vbox = QVBoxLayout(w)
+        vbox.setContentsMargins(0, 8, 0, 0)
+        vbox.setSpacing(8)
 
-        names = get_motor_names_by_group(group)
-        for i, name in enumerate(names):
+        # ---- 全局运动参数 ----
+        global_group = QGroupBox("全局运动参数")
+        global_group.setStyleSheet(self._card_style())
+        global_row = QHBoxLayout(global_group)
+        global_row.setContentsMargins(12, 8, 12, 8)
+        global_row.setSpacing(12)
+
+        global_row.addWidget(QLabel("加速度:"))
+        self._global_accel_spin = QDoubleSpinBox()
+        self._global_accel_spin.setRange(0.1, 9999.0)
+        self._global_accel_spin.setValue(100.0)
+        self._global_accel_spin.setSuffix(" mm/s²")
+        self._global_accel_spin.setStyleSheet(self._spin_style())
+        self._global_accel_spin.setFixedWidth(140)
+        global_row.addWidget(self._global_accel_spin)
+
+        global_row.addSpacing(8)
+
+        global_row.addWidget(QLabel("减速度:"))
+        self._global_decel_spin = QDoubleSpinBox()
+        self._global_decel_spin.setRange(0.1, 9999.0)
+        self._global_decel_spin.setValue(100.0)
+        self._global_decel_spin.setSuffix(" mm/s²")
+        self._global_decel_spin.setStyleSheet(self._spin_style())
+        self._global_decel_spin.setFixedWidth(140)
+        global_row.addWidget(self._global_decel_spin)
+
+        global_row.addSpacing(16)
+
+        btn_apply = QPushButton("应用至所有轴")
+        btn_apply.setStyleSheet(QSS_PRIMARY_BUTTON)
+        btn_apply.clicked.connect(self._on_apply_global_params)
+        global_row.addWidget(btn_apply)
+
+        btn_sync_all = QPushButton("同步全部参数")
+        btn_sync_all.setStyleSheet(QSS_PRIMARY_BUTTON)
+        btn_sync_all.clicked.connect(self._on_sync_all_params)
+        global_row.addWidget(btn_sync_all)
+
+        global_row.addStretch()
+        vbox.addWidget(global_group)
+
+        # ---- 2x3 电机网格 ----
+        grid_w = QWidget()
+        grid = QGridLayout(grid_w)
+        grid.setSpacing(10)
+
+        # Row 0: 小龙门 (Z / X / YL)
+        small_names = get_motor_names_by_group("Small Gantry")
+        for col, name in enumerate(small_names):
             mc = self._motor_configs.get(name)
             if mc is None:
                 continue
             mw = MotorWidget(mc)
             mw.write_requested.connect(self._on_write_requested)
             self._motor_widgets[name] = mw
-            layout.addWidget(mw, i // 3, i % 3)
+            grid.addWidget(mw, 0, col)
 
+        # Row 1: 大龙门 (ZZ / XX / YLL)
+        big_names = get_motor_names_by_group("Big Gantry")
+        for col, name in enumerate(big_names):
+            mc = self._motor_configs.get(name)
+            if mc is None:
+                continue
+            mw = MotorWidget(mc)
+            mw.write_requested.connect(self._on_write_requested)
+            self._motor_widgets[name] = mw
+            grid.addWidget(mw, 1, col)
+
+        vbox.addWidget(grid_w, stretch=1)
         return w
 
     def _build_integrated_tab(self) -> QWidget:
@@ -175,7 +235,7 @@ class MotorControlPage(QWidget):
         table.setMaximumHeight(180)
         table.setStyleSheet(
             f"QTableWidget {{"
-            f"  background-color: {BG_DARK}; color: {TEXT_PRIMARY};"
+            f"  background-color: #FAFBFC; color: {TEXT_PRIMARY};"
             f"  border: 1px solid {BORDER_CARD};"
             f"  gridline-color: {BORDER_CARD};"
             f"  font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM}px;"
@@ -197,6 +257,41 @@ class MotorControlPage(QWidget):
         layout.addWidget(btn_del)
 
         return group
+
+    # ---- global params apply ------------------------------------------------
+
+    def _on_apply_global_params(self):
+        """将统一加速度/减速度下发到所有 6 个轴。"""
+        acc = self._global_accel_spin.value()
+        dec = self._global_decel_spin.value()
+
+        for name, mw in self._motor_widgets.items():
+            mc = self._motor_configs.get(name)
+            if mc is None:
+                continue
+            acc_addr = mc.register_addr("acc_set")
+            if acc_addr is not None:
+                self._plc.add_write_task("float", acc_addr, acc)
+            dec_addr = mc.register_addr("dec_set")
+            if dec_addr is not None:
+                self._plc.add_write_task("float", dec_addr, dec)
+
+    def _on_sync_all_params(self):
+        """将每个电机的参数输入框值统一下发到 PLC。"""
+        for name, mw in self._motor_widgets.items():
+            mc = self._motor_configs.get(name)
+            if mc is None:
+                continue
+            try:
+                for key, widget in mw.inputs.items():
+                    val = float(widget.text())
+                    addr = mc.register_addr(key)
+                    if addr is not None:
+                        self._plc.add_write_task("float", addr, val)
+            except ValueError:
+                QMessageBox.warning(
+                    self, "参数错误",
+                    f"{name}: 参数必须是数字，请检查输入。")
 
     # ---- signal wiring ----------------------------------------------------
 
@@ -361,6 +456,17 @@ class MotorControlPage(QWidget):
 
     # ---- style helpers ----------------------------------------------------
 
+    def _spin_style(self) -> str:
+        return (
+            f"QDoubleSpinBox {{"
+            f"  background-color: #FFFFFF; color: {TEXT_PRIMARY};"
+            f"  border: 1px solid {BORDER_CARD}; border-radius: 3px;"
+            f"  padding: 4px 8px; font-family: {FONT_MONO};"
+            f"  font-size: {FONT_SIZE_SM}px;"
+            f"}}"
+            f"QDoubleSpinBox:focus {{ border-color: {BLUE_FUNC}; }}"
+        )
+
     def _btn_style(self) -> str:
         return (
             f"QPushButton {{"
@@ -376,11 +482,12 @@ class MotorControlPage(QWidget):
     def _input_style(self) -> str:
         return (
             f"QLineEdit {{"
-            f"  background-color: {BG_DARK}; color: {TEXT_PRIMARY};"
+            f"  background-color: #FFFFFF; color: {TEXT_PRIMARY};"
             f"  border: 1px solid {BORDER_CARD}; border-radius: 3px;"
             f"  padding: 4px 8px; font-family: {FONT_MONO};"
             f"  font-size: {FONT_SIZE_SM}px;"
             f"}}"
+            f"QLineEdit:focus {{ border-color: {BLUE_FUNC}; }}"
         )
 
     def _card_style(self) -> str:
@@ -402,7 +509,7 @@ class MotorControlPage(QWidget):
         return (
             f"QTabWidget::pane {{"
             f"  border: 1px solid {BORDER_CARD};"
-            f"  background-color: {BG_DARK};"
+            f"  background-color: #FAFBFC;"
             f"}}"
             f"QTabBar::tab {{"
             f"  background-color: {BG_PANEL}; color: {TEXT_SECONDARY};"
@@ -410,7 +517,7 @@ class MotorControlPage(QWidget):
             f"  padding: 6px 16px; margin-right: 2px;"
             f"}}"
             f"QTabBar::tab:selected {{"
-            f"  background-color: {BG_DARK}; color: {BLUE_FUNC};"
+            f"  background-color: #FAFBFC; color: {BLUE_FUNC};"
             f"  border-bottom: 2px solid {BLUE_FUNC};"
             f"}}"
         )

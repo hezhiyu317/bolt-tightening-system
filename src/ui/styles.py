@@ -1,30 +1,31 @@
-"""全局样式常量 — 深色工业控制主题。
+"""全局样式常量 — 现代明亮工业控制主题（Light Theme）。
 
-色彩体系来自 UIdetails.txt 规格说明书。
+色彩体系来自 UI/UX 优化建议书。
 """
 
-# ---- 主色调 ----------------------------------------------------------------
-BG_DARK = "#0B1622"          # 主背景 — 科技深蓝
-BG_PANEL = "#0F1D2F"         # 卡片/面板背景
-BG_HEADER = "#08111C"        # 顶部栏背景
-BG_SIDEBAR = "#0A1420"       # 侧边栏背景
-BG_FOOTER = "#060D14"        # 底部栏背景
+# ---- 背景层 ----------------------------------------------------------------
+BG_BASE = "#F0F2F5"          # 全局大背景 — 浅灰蓝（不用纯白，大屏不刺眼）
+BG_PANEL = "#FFFFFF"         # 卡片/面板背景 — 纯白
+BG_HEADER = "#FFFFFF"        # 顶部栏背景
+BG_SIDEBAR = "#FFFFFF"       # 侧边栏背景
+BG_FOOTER = "#FFFFFF"        # 底部栏背景
+BG_DARK = "#F0F2F5"          # 兼容旧引用 — 同 BG_BASE
 
 # ---- 功能色 ----------------------------------------------------------------
-GREEN_STATUS = "#00FFCC"     # 正常 / 在线 / 进行中
-BLUE_FUNC = "#0099FF"        # 选中 / 主按钮 / 导航
-RED_ALERT = "#FF4D4D"        # 急停 / 故障 / 报警
-ORANGE_WARN = "#FFA500"      # 预警 / 待机
+GREEN_STATUS = "#52C41A"     # 正常 / 在线 / 已同步
+BLUE_FUNC = "#1890FF"        # 选中 / 主按钮 / 导航 / 科技蓝
+RED_ALERT = "#FF4D4F"        # 急停 / 故障 / 报警
+ORANGE_WARN = "#FAAD14"      # 预警 / 待机 / 未连接
 
 # ---- 文字色 ----------------------------------------------------------------
-TEXT_PRIMARY = "#E0E6EE"     # 主要文字
-TEXT_SECONDARY = "#8899AA"   # 次要文字 / 标签
-TEXT_DIM = "#556677"         # 禁用 / 占位
+TEXT_PRIMARY = "#262626"     # 主要文字 / 标题
+TEXT_SECONDARY = "#595959"   # 次要文字 / 标签
+TEXT_DIM = "#8C8C8C"         # 禁用 / 占位 / 辅助信息
 
-# ---- 边框与发光 ------------------------------------------------------------
-BORDER_CARD = "#1A3350"      # 卡片描边
-GLOW_BLUE = "rgba(0, 153, 255, 0.3)"   # 蓝色发光（选中态）
-GLOW_GREEN = "rgba(0, 255, 204, 0.3)"  # 绿色发光（运行态）
+# ---- 边框与阴影 ------------------------------------------------------------
+BORDER_CARD = "#E4E7ED"      # 卡片描边 / 分割线
+GLOW_BLUE = "rgba(24, 144, 255, 0.3)"   # 蓝色发光（选中态）
+GLOW_GREEN = "rgba(82, 196, 26, 0.3)"   # 绿色发光（运行态）
 
 # ---- 状态色映射 ------------------------------------------------------------
 STATUS_COLORS = {
@@ -72,13 +73,14 @@ QSS_PRIMARY_BUTTON = f"""
         font-weight: bold;
     }}
     QPushButton:hover {{
-        background-color: #33ADFF;
+        background-color: #40A9FF;
     }}
     QPushButton:pressed {{
-        background-color: #007ACC;
+        background-color: #096DD9;
     }}
     QPushButton:disabled {{
         background-color: {TEXT_DIM};
+        color: #FFFFFF;
     }}
 """
 
@@ -92,10 +94,10 @@ QSS_DANGER_BUTTON = f"""
         font-weight: bold;
     }}
     QPushButton:hover {{
-        background-color: #FF6666;
+        background-color: #FF7875;
     }}
     QPushButton:pressed {{
-        background-color: #CC0000;
+        background-color: #D9363E;
     }}
 """
 

@@ -222,20 +222,6 @@ class CameraService(QObject):
 
     def _stream_loop(self):
         """2D 图像采集主循环。"""
-        try:
-            self._parameter_manager.reset_current_value()
-            params_cfg = config.get("system.camera.default_parameters.2d", {})
-            mode = params_cfg.get("exposure_mode", "FLASH")
-            exp_time = params_cfg.get("exposure_time", 5000)
-            self._parameter_manager.update_current_enumeration_value(
-                PARAM_2D_EXPOSURE_MODE, mode,
-            )
-            self._parameter_manager.update_current_integer_value(
-                PARAM_2D_EXPOSURE_TIME, exp_time,
-            )
-        except Exception as e:
-            app_logger.error(f"设置 2D 参数失败: {e}")
-
         img_path = os.path.join(self._temp_dir, "temp_2d_stream.bmp")
 
         while self._streaming:
@@ -264,18 +250,10 @@ class CameraService(QObject):
         self._streaming = False
         time.sleep(0.1)
 
+        # 参数由 apply_default_parameters()（连接时）和 UI 控件实时写入维护，
+        # 此处不再 reset/re-apply，直接使用当前参数管理器中的值采集点云。
         with self._lock:
             try:
-                self._parameter_manager.reset_current_value()
-                params_3d = config.get("system.camera.default_parameters.3d", {})
-                exp_array = params_3d.get("exposure_time_array", [30000])
-                for i, val in enumerate(exp_array):
-                    if i > 0:
-                        self._parameter_manager.add_array_element_for_current(
-                            PARAM_3D_EXPOSURE_ARRAY)
-                    self._parameter_manager.update_current_integer_value(
-                        f"{PARAM_3D_EXPOSURE_ARRAY}[{i}]", val,
-                    )
                 pc_path = os.path.join(self._temp_dir, "temp_3d_cloud.pcd")
                 point_cloud = self._device_controller.grab_point_cloud()
                 point_cloud.save(pc_path)
@@ -324,69 +302,105 @@ class CameraService(QObject):
             except Exception:
                 pass
 
-            try:
-                params_2d = config.get("system.camera.default_parameters.2d", {})
-                if params_2d.get("exposure_mode"):
-                    self._parameter_manager.update_current_enumeration_value(
-                        PARAM_2D_EXPOSURE_MODE, params_2d["exposure_mode"])
-                if params_2d.get("exposure_time"):
-                    self._parameter_manager.update_current_integer_value(
-                        PARAM_2D_EXPOSURE_TIME, params_2d["exposure_time"])
-                if params_2d.get("gain") is not None:
-                    self._parameter_manager.update_current_integer_value(
-                        PARAM_2D_GAIN, params_2d["gain"])
-                if params_2d.get("gamma") is not None:
-                    self._parameter_manager.update_current_float_value(
-                        PARAM_2D_GAMMA, params_2d["gamma"])
-                if params_2d.get("fast_hdr") is not None:
-                    self._parameter_manager.update_current_boolean_value(
-                        PARAM_2D_FAST_HDR, params_2d["fast_hdr"])
-                if params_2d.get("gray_value_lower") is not None:
-                    self._parameter_manager.update_current_integer_value(
-                        PARAM_2D_GRAY_LOWER, params_2d["gray_value_lower"])
-                if params_2d.get("gray_value_upper") is not None:
-                    self._parameter_manager.update_current_integer_value(
-                        PARAM_2D_GRAY_UPPER, params_2d["gray_value_upper"])
+            pm = self._parameter_manager
+            p2 = config.get("system.camera.default_parameters.2d", {})
+            p3 = config.get("system.camera.default_parameters.3d", {})
 
-                params_3d = config.get("system.camera.default_parameters.3d", {})
-                for i, val in enumerate(params_3d.get("exposure_time_array", [])):
+            # Each param write is isolated — one failure won't skip the rest.
+
+            # -- 2D params --
+            try:
+                if p2.get("exposure_mode"):
+                    pm.update_current_enumeration_value(PARAM_2D_EXPOSURE_MODE, p2["exposure_mode"])
+            except Exception:
+                pass
+            try:
+                if p2.get("exposure_time"):
+                    pm.update_current_integer_value(PARAM_2D_EXPOSURE_TIME, p2["exposure_time"])
+            except Exception:
+                pass
+            try:
+                if p2.get("gain") is not None:
+                    pm.update_current_integer_value(PARAM_2D_GAIN, p2["gain"])
+            except Exception:
+                pass
+            try:
+                if p2.get("gamma") is not None:
+                    pm.update_current_float_value(PARAM_2D_GAMMA, p2["gamma"])
+            except Exception:
+                pass
+            try:
+                if p2.get("fast_hdr") is not None:
+                    pm.update_current_boolean_value(PARAM_2D_FAST_HDR, p2["fast_hdr"])
+            except Exception:
+                pass
+            try:
+                if p2.get("gray_value_lower") is not None:
+                    pm.update_current_integer_value(PARAM_2D_GRAY_LOWER, p2["gray_value_lower"])
+            except Exception:
+                pass
+            try:
+                if p2.get("gray_value_upper") is not None:
+                    pm.update_current_integer_value(PARAM_2D_GRAY_UPPER, p2["gray_value_upper"])
+            except Exception:
+                pass
+
+            # -- 3D exposure array --
+            try:
+                for i, val in enumerate(p3.get("exposure_time_array", [])):
                     if i > 0:
-                        self._parameter_manager.add_array_element_for_current(
-                            PARAM_3D_EXPOSURE_ARRAY)
-                    self._parameter_manager.update_current_integer_value(
+                        pm.add_array_element_for_current(PARAM_3D_EXPOSURE_ARRAY)
+                    pm.update_current_integer_value(
                         f"{PARAM_3D_EXPOSURE_ARRAY}[{i}]", val)
-                if params_3d.get("gain") is not None:
-                    self._parameter_manager.update_current_integer_value(
-                        PARAM_3D_GAIN, params_3d["gain"])
-                if params_3d.get("light_engine_brightness") is not None:
-                    self._parameter_manager.update_current_integer_value(
-                        PARAM_3D_BRIGHTNESS, params_3d["light_engine_brightness"])
-                if params_3d.get("enhance_mode") is not None:
-                    self._parameter_manager.update_current_boolean_value(
-                        PARAM_3D_ENHANCE, params_3d["enhance_mode"])
-                if params_3d.get("denoise_mode") is not None:
-                    self._parameter_manager.update_current_boolean_value(
-                        PARAM_3D_DENOISE, params_3d["denoise_mode"])
-                if params_3d.get("hole_filling") is not None:
-                    self._parameter_manager.update_current_integer_value(
-                        PARAM_3D_HOLE_FILLING, params_3d["hole_filling"])
-                if params_3d.get("filter_mode"):
-                    self._parameter_manager.update_current_enumeration_value(
-                        PARAM_3D_FILTER_MODE, params_3d["filter_mode"])
-                if params_3d.get("edge_protection") is not None:
-                    self._parameter_manager.update_current_boolean_value(
-                        PARAM_3D_EDGE_PROTECTION, params_3d["edge_protection"])
-                if params_3d.get("decode_threshold") is not None:
-                    self._parameter_manager.update_current_integer_value(
-                        PARAM_3D_DECODE_THRESHOLD, params_3d["decode_threshold"])
-                if params_3d.get("depth_range_lower") is not None:
-                    self._parameter_manager.update_current_integer_value(
-                        PARAM_3D_DEPTH_LOWER, params_3d["depth_range_lower"])
-                if params_3d.get("depth_range_upper") is not None:
-                    self._parameter_manager.update_current_integer_value(
-                        PARAM_3D_DEPTH_UPPER, params_3d["depth_range_upper"])
-            except Exception as e:
-                app_logger.warning(f"应用默认参数异常: {e}")
+            except Exception:
+                pass
+
+            # -- 3D params --
+            try:
+                if p3.get("gain") is not None:
+                    pm.update_current_integer_value(PARAM_3D_GAIN, p3["gain"])
+            except Exception:
+                pass
+            try:
+                if p3.get("enhance_mode") is not None:
+                    pm.update_current_boolean_value(PARAM_3D_ENHANCE, p3["enhance_mode"])
+            except Exception:
+                pass
+            try:
+                if p3.get("denoise_mode") is not None:
+                    pm.update_current_boolean_value(PARAM_3D_DENOISE, p3["denoise_mode"])
+            except Exception:
+                pass
+            try:
+                if p3.get("hole_filling") is not None:
+                    pm.update_current_integer_value(PARAM_3D_HOLE_FILLING, p3["hole_filling"])
+            except Exception:
+                pass
+            try:
+                if p3.get("filter_mode"):
+                    pm.update_current_enumeration_value(PARAM_3D_FILTER_MODE, p3["filter_mode"])
+            except Exception:
+                pass
+            try:
+                if p3.get("edge_protection") is not None:
+                    pm.update_current_boolean_value(PARAM_3D_EDGE_PROTECTION, p3["edge_protection"])
+            except Exception:
+                pass
+            try:
+                if p3.get("decode_threshold") is not None:
+                    pm.update_current_integer_value(PARAM_3D_DECODE_THRESHOLD, p3["decode_threshold"])
+            except Exception:
+                pass
+            try:
+                if p3.get("depth_range_lower") is not None:
+                    pm.update_current_integer_value(PARAM_3D_DEPTH_LOWER, p3["depth_range_lower"])
+            except Exception:
+                pass
+            try:
+                if p3.get("depth_range_upper") is not None:
+                    pm.update_current_integer_value(PARAM_3D_DEPTH_UPPER, p3["depth_range_upper"])
+            except Exception:
+                pass
 
     # ---- parameter write helpers ----------------------------------------------
 

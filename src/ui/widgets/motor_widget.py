@@ -1,6 +1,6 @@
 """单电机控制卡片 — 显示 + 参数 + 运动控制。
 
-重构自 test_total/test_total/ui_widgets.py MotorWidget。
+仿照 test_total/ui_widgets.py MotorWidget 布局。
 """
 
 from PyQt5.QtCore import QTimer, pyqtSignal
@@ -45,8 +45,14 @@ class MotorWidget(QGroupBox):
         self._mc = motor_config
         self._is_y_axis = motor_config.gantry_axis in ("Y_left", "Y_right")
         self._gantry_synced = False
+        self._inputs: dict = {}
         self._setup_ui()
         self.set_enabled_all(False)
+
+    @property
+    def inputs(self) -> dict:
+        """暴露输入框引用给上层，用于全局参数同步。"""
+        return self._inputs
 
     # ---- UI ----------------------------------------------------------------
 
@@ -55,9 +61,16 @@ class MotorWidget(QGroupBox):
         main = QVBoxLayout(self)
         main.setSpacing(6)
 
+        # 1. 显示区
         main.addLayout(self._build_display())
+
+        # 2. 参数区（无 acc/dec，无同步按钮）
         main.addLayout(self._build_params())
+
+        # 3. 运动控制按钮
         main.addLayout(self._build_motion())
+
+        # 4. 状态按钮
         main.addLayout(self._build_state())
 
     def _build_display(self) -> QGridLayout:
@@ -85,32 +98,24 @@ class MotorWidget(QGroupBox):
         grid = QGridLayout()
         grid.setSpacing(3)
 
-        self._inputs = {}
         param_config = [
             ("点动速度", "jog_vel_set"),
             ("相对速度", "rel_vel_set"),
             ("绝对速度", "abs_vel_set"),
             ("相对距离", "rel_pos_set"),
             ("绝对坐标", "abs_pos_set"),
-            ("加速度", "acc_set"),
-            ("减速度", "dec_set"),
         ]
-        defaults = {"acc_set": "100.0", "dec_set": "100.0"}
         for i, (label_text, key) in enumerate(param_config):
             lbl = QLabel(label_text)
             lbl.setStyleSheet(
                 f"color: {TEXT_SECONDARY}; font-size: {FONT_SIZE_SM}px;")
-            inp = QLineEdit(defaults.get(key, "0.0"))
+            inp = QLineEdit("0.0")
             inp.setStyleSheet(self._input_style())
             inp.setFixedWidth(80)
             self._inputs[key] = inp
-            grid.addWidget(lbl, i // 2, (i % 2) * 2)
-            grid.addWidget(inp, i // 2, (i % 2) * 2 + 1)
+            grid.addWidget(lbl, i, 0)
+            grid.addWidget(inp, i, 1)
 
-        btn = QPushButton("同步参数至电机")
-        btn.setStyleSheet(self._btn_style())
-        btn.clicked.connect(self._on_sync_params)
-        grid.addWidget(btn, 4, 0, 1, 4)
         return grid
 
     def _build_motion(self) -> QGridLayout:
@@ -124,7 +129,7 @@ class MotorWidget(QGroupBox):
 
         for b in (self._btn_jog_neg, self._btn_jog_pos,
                    self._btn_rel, self._btn_abs):
-            b.setStyleSheet(self._btn_style())
+            b.setStyleSheet(self._motion_btn_style())
 
         self._btn_jog_neg.pressed.connect(
             lambda: self._set_cmd_bit("jog_b_cmd", 1))
@@ -150,24 +155,27 @@ class MotorWidget(QGroupBox):
         row.setSpacing(4)
 
         self._btn_enable = QPushButton("使能")
+        self._btn_enable.setStyleSheet(self._enable_btn_style(False))
         self._btn_enable.clicked.connect(self._on_enable)
+
         self._btn_reset = QPushButton("复位")
+        self._btn_reset.setStyleSheet(self._state_btn_style())
         self._btn_reset.clicked.connect(
             lambda: self._trigger_cmd("reset_cmd"))
+
         self._btn_home = QPushButton("寻零")
+        self._btn_home.setStyleSheet(self._state_btn_style())
         self._btn_home.clicked.connect(
             lambda: self._trigger_cmd("home_cmd"))
+
         self._btn_stop = QPushButton("急停")
         self._btn_stop.setStyleSheet(
-            f"background-color: {RED_ALERT}; color: #FFF;"
+            f"background-color: {RED_ALERT}; color: #FFFFFF;"
             f"font-weight: bold; border: none; border-radius: 3px;"
             f"padding: 4px 10px;"
         )
         self._btn_stop.clicked.connect(
             lambda: self._trigger_cmd("stop_cmd"))
-
-        for b in (self._btn_reset, self._btn_home):
-            b.setStyleSheet(self._btn_style())
 
         row.addWidget(self._btn_enable)
         row.addWidget(self._btn_reset)
@@ -187,7 +195,8 @@ class MotorWidget(QGroupBox):
             f"color: {GREEN_STATUS if powered else TEXT_DIM};"
             f"font-family: {FONT_FAMILY};"
         )
-        was_green = "rgb(0,255,204)" in (self._btn_enable.styleSheet() or "")
+        # 同步使能按钮样式
+        was_green = GREEN_STATUS in (self._btn_enable.styleSheet() or "")
         if powered and not was_green:
             self._set_enable_style(True)
         elif not powered and was_green:
@@ -222,7 +231,7 @@ class MotorWidget(QGroupBox):
         QTimer.singleShot(200, lambda: self._set_cmd_bit(offset_key, 0))
 
     def _on_enable(self):
-        was_green = "rgb(0,255,204)" in (self._btn_enable.styleSheet() or "")
+        was_green = GREEN_STATUS in (self._btn_enable.styleSheet() or "")
         target = not was_green
         self._set_enable_style(target)
         self.write_requested.emit({
@@ -230,30 +239,12 @@ class MotorWidget(QGroupBox):
             "val": target, "bit": None,
         })
 
-    def _on_sync_params(self):
-        try:
-            for key, widget in self._inputs.items():
-                val = float(widget.text())
-                addr = self._mc.register_addr(key)
-                if addr is not None:
-                    self.write_requested.emit({
-                        "type": "float", "addr": addr,
-                        "val": val, "bit": None,
-                    })
-        except ValueError:
-            QMessageBox.warning(self, "错误", "参数必须是数字")
-
     def _set_enable_style(self, powered: bool):
         if powered:
             self._btn_enable.setText("已使能")
-            self._btn_enable.setStyleSheet(
-                f"background-color: {GREEN_STATUS}; color: {BG_PANEL};"
-                f"font-weight: bold; border: none; border-radius: 3px;"
-                f"padding: 4px 10px;"
-            )
         else:
             self._btn_enable.setText("使能")
-            self._btn_enable.setStyleSheet(self._btn_style())
+        self._btn_enable.setStyleSheet(self._enable_btn_style(powered))
 
     # ---- style helpers ----------------------------------------------------
 
@@ -265,26 +256,58 @@ class MotorWidget(QGroupBox):
         )
         return lbl
 
-    def _btn_style(self) -> str:
+    def _motion_btn_style(self) -> str:
+        """运动按钮 — 仿 test_total 简洁风格。"""
         return (
             f"QPushButton {{"
-            f"  background-color: transparent; color: {BLUE_FUNC};"
-            f"  border: 1px solid {BLUE_FUNC}; border-radius: 3px;"
+            f"  background-color: #FFFFFF; color: {TEXT_PRIMARY};"
+            f"  border: 1px solid {BORDER_CARD}; border-radius: 3px;"
             f"  padding: 4px 8px; font-size: {FONT_SIZE_SM}px;"
             f"}}"
-            f"QPushButton:hover {{"
-            f"  background-color: {BLUE_FUNC}; color: #FFF;"
-            f"}}"
+            f"QPushButton:hover {{ border-color: {BLUE_FUNC}; }}"
+            f"QPushButton:pressed {{ background-color: #F0F2F5; }}"
         )
+
+    def _state_btn_style(self) -> str:
+        """状态按钮（复位/寻零）— 仿 test_total 简洁风格。"""
+        return (
+            f"QPushButton {{"
+            f"  background-color: #FFFFFF; color: {TEXT_PRIMARY};"
+            f"  border: 1px solid {BORDER_CARD}; border-radius: 3px;"
+            f"  padding: 4px 10px; font-size: {FONT_SIZE_SM}px;"
+            f"}}"
+            f"QPushButton:hover {{ border-color: {BLUE_FUNC}; }}"
+            f"QPushButton:pressed {{ background-color: #F0F2F5; }}"
+        )
+
+    def _enable_btn_style(self, powered: bool) -> str:
+        if powered:
+            return (
+                f"QPushButton {{"
+                f"  background-color: {GREEN_STATUS}; color: #FFFFFF;"
+                f"  font-weight: bold; border: none; border-radius: 3px;"
+                f"  padding: 4px 10px; font-size: {FONT_SIZE_SM}px;"
+                f"}}"
+            )
+        else:
+            return (
+                f"QPushButton {{"
+                f"  background-color: #FFFFFF; color: {TEXT_PRIMARY};"
+                f"  border: 1px solid {BORDER_CARD}; border-radius: 3px;"
+                f"  padding: 4px 10px; font-size: {FONT_SIZE_SM}px;"
+                f"}}"
+                f"QPushButton:hover {{ border-color: {BLUE_FUNC}; }}"
+            )
 
     def _input_style(self) -> str:
         return (
             f"QLineEdit {{"
-            f"  background-color: {BG_PANEL}; color: {TEXT_PRIMARY};"
+            f"  background-color: #FFFFFF; color: {TEXT_PRIMARY};"
             f"  border: 1px solid {BORDER_CARD}; border-radius: 3px;"
             f"  padding: 3px 6px; font-family: {FONT_MONO};"
             f"  font-size: {FONT_SIZE_SM}px;"
             f"}}"
+            f"QLineEdit:focus {{ border-color: {BLUE_FUNC}; }}"
         )
 
     def _card_style(self) -> str:

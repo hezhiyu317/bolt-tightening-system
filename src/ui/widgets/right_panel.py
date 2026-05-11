@@ -3,6 +3,8 @@
 始终可见，宽约 1/3 窗口。
 """
 
+import glob
+import os
 from typing import Optional
 
 from PyQt5.QtCore import Qt
@@ -11,6 +13,7 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -20,7 +23,7 @@ from src.models.app_state import app_state
 from src.services.camera_service import CameraService
 from src.services.pcl_service import PclService
 from src.ui.styles import (
-    BG_DARK,
+    BG_BASE,
     BG_PANEL,
     BLUE_FUNC,
     BORDER_CARD,
@@ -100,7 +103,7 @@ class RightPanel(QWidget):
         self._camera_view.setAlignment(Qt.AlignCenter)
         self._camera_view.setMinimumHeight(200)
         self._camera_view.setStyleSheet(
-            f"background-color: {BG_DARK};"
+            f"background-color: #FAFBFC;"
             f"border: 1px solid {BORDER_CARD};"
             f"border-radius: 4px;"
             f"color: {TEXT_DIM};"
@@ -134,18 +137,18 @@ class RightPanel(QWidget):
         row1.addWidget(self._camera_label)
         layout.addLayout(row1)
 
-        # 急停
+        # 急停（全局唯一，胶囊形大按钮）
         self._estop_btn = QPushButton("急 停")
         self._estop_btn.setStyleSheet(
             f"QPushButton {{"
             f"  background-color: {RED_ALERT};"
             f"  color: #FFFFFF;"
             f"  font-size: 18px; font-weight: bold;"
-            f"  border: none; border-radius: 4px;"
-            f"  padding: 8px;"
+            f"  border: none; border-radius: 24px;"
+            f"  padding: 10px;"
             f"}}"
-            f"QPushButton:hover {{ background-color: #FF6666; }}"
-            f"QPushButton:checked {{ background-color: #CC0000; }}"
+            f"QPushButton:hover {{ background-color: #FF7875; }}"
+            f"QPushButton:checked {{ background-color: #D9363E; }}"
         )
         self._estop_btn.setCheckable(True)
         self._estop_btn.clicked.connect(self._on_estop)
@@ -234,12 +237,17 @@ class RightPanel(QWidget):
         self._update_coord(name, value)
 
     def _on_motor_updated(self, name: str):
-        """完整电机状态更新。"""
+        """完整电机状态更新 — 坐标 + 力矩。"""
         ms = app_state.motor_state(name)
         if ms is None:
             return
         pos = f"{ms.position:.1f}" if ms.position else "--"
         self._update_coord(name, pos)
+        # 旋转电机更新力矩显示
+        if name in ("SPF_motor", "SPT_motor", "SPM_motor", "SPC_motor"):
+            torque = ms.torque
+            if torque:
+                self._torque_label.setText(f"{torque:.1f}")
 
     def _on_image_grabbed(self, path: str):
         pix = QPixmap(path)
@@ -254,6 +262,7 @@ class RightPanel(QWidget):
 
     def _on_pc_grabbed(self, path: str):
         self._btn_process.setEnabled(True)
+        self._btn_process.setText("计算")
         self._btn_process.setStyleSheet(QSS_PRIMARY_BUTTON)
 
     def _on_pcl_done(self, result: dict):
@@ -268,6 +277,7 @@ class RightPanel(QWidget):
         self._btn_process.setStyleSheet(QSS_PRIMARY_BUTTON)
 
     def _on_pcl_error(self, msg: str):
+        QMessageBox.warning(self, "PCL 处理失败", msg)
         self._btn_process.setEnabled(True)
         self._btn_process.setText("计算")
         self._btn_process.setStyleSheet(QSS_PRIMARY_BUTTON)
@@ -278,13 +288,16 @@ class RightPanel(QWidget):
             self._btn_connect.setStyleSheet(QSS_DANGER_BUTTON)
             self._btn_capture.setEnabled(True)
             self._btn_capture.setStyleSheet(QSS_PRIMARY_BUTTON)
+            self._btn_process.setEnabled(True)
+            self._btn_process.setStyleSheet(QSS_PRIMARY_BUTTON)
         else:
             self._btn_connect.setText("连接相机")
             self._btn_connect.setStyleSheet(QSS_PRIMARY_BUTTON)
             self._btn_capture.setEnabled(False)
             self._btn_capture.setStyleSheet(QSS_SECONDARY_BUTTON)
-            self._btn_process.setEnabled(False)
-            self._btn_process.setStyleSheet(QSS_SECONDARY_BUTTON)
+            # 计算按钮始终可用，查找已存在的 PCD 文件
+            self._btn_process.setEnabled(True)
+            self._btn_process.setStyleSheet(QSS_PRIMARY_BUTTON)
 
     # ---- button handlers -----------------------------------------------------
 
@@ -298,18 +311,21 @@ class RightPanel(QWidget):
 
     def _on_capture(self):
         if self._camera:
-            self._btn_process.setEnabled(False)
-            self._btn_process.setText("等待中...")
-            self._btn_process.setStyleSheet(QSS_SECONDARY_BUTTON)
             self._camera.trigger_3d_capture()
 
     def _on_process(self):
-        if self._pcl:
-            pcd_path = self._camera._temp_dir + "/temp_3d_cloud.pcd"
-            self._btn_process.setEnabled(False)
-            self._btn_process.setText("计算中...")
-            self._btn_process.setStyleSheet(QSS_SECONDARY_BUTTON)
-            self._pcl.process_pcd(pcd_path)
+        if not self._pcl:
+            return
+        pcd_dir = self._camera._temp_dir if self._camera else "./temp_cam_data"
+        pcd_files = sorted(glob.glob(os.path.join(pcd_dir, "*.pcd")))
+        if not pcd_files:
+            QMessageBox.warning(self, "提示", "未找到 PCD 文件，请先拍摄点云")
+            return
+        pcd_path = pcd_files[0]
+        self._btn_process.setEnabled(False)
+        self._btn_process.setText("计算中...")
+        self._btn_process.setStyleSheet(QSS_SECONDARY_BUTTON)
+        self._pcl.process_pcd(pcd_path)
 
     def _on_estop(self):
         app_state.is_estop = self._estop_btn.isChecked()
@@ -353,16 +369,18 @@ class RightPanel(QWidget):
         row = QHBoxLayout()
         row.setSpacing(4)
         axis_lbl = QLabel(axis)
-        axis_lbl.setFixedWidth(14)
+        axis_lbl.setFixedWidth(16)
+        axis_lbl.setAlignment(Qt.AlignCenter)
         axis_lbl.setStyleSheet(
-            f"color: {TEXT_DIM}; font-family: {FONT_MONO};"
-            f"font-size: {FONT_SIZE_SM}px;"
+            f"color: {BLUE_FUNC}; font-family: {FONT_MONO};"
+            f"font-size: {FONT_SIZE_SM}px; font-weight: bold;"
         )
         val_lbl = QLabel("--")
+        val_lbl.setAlignment(Qt.AlignRight)
         val_lbl.setStyleSheet(self._value_mono_style())
+        val_lbl.setMinimumWidth(80)
         row.addWidget(axis_lbl)
-        row.addWidget(val_lbl)
-        row.addStretch()
+        row.addWidget(val_lbl, stretch=1)
         return row
 
     def _labeled_row(self, label: str, val_lbl: QLabel, unit: str) -> QHBoxLayout:

@@ -19,15 +19,26 @@ camera:
         - 20000
         - 6000
       gain: 1
-      light_engine_brightness: 800
       enhance_mode: true
       denoise_mode: true
       hole_filling: 0
       filter_mode: HIGH
       edge_protection: true
       decode_threshold: 8
-      depth_range_lower: 250
-      depth_range_upper: 350
+      depth_range_lower: 200
+      depth_range_upper: 300
+gun:
+  registers:
+    start: 100       # 启动拧紧枪 (寄存器地址，待 PLC 确认)
+    reset: 101       # 复位
+    forward: 102     # 正转
+    reverse: 103     # 反转
+  torque_motors:
+    - SPF_motor
+    - SPT_motor
+    - SPM_motor
+    - SPC_motor
+
 pcl:
   default_params:
     plane_distance_threshold: 0.05

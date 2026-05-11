@@ -33,7 +33,6 @@ from src.services.camera_service import (
     PARAM_2D_GAMMA,
     PARAM_2D_GRAY_LOWER,
     PARAM_2D_GRAY_UPPER,
-    PARAM_3D_BRIGHTNESS,
     PARAM_3D_DECODE_THRESHOLD,
     PARAM_3D_DENOISE,
     PARAM_3D_DEPTH_LOWER,
@@ -48,7 +47,7 @@ from src.services.camera_service import (
 from src.services.camera_service import CameraService
 from src.services.pcl_service import PclService
 from src.ui.styles import (
-    BG_DARK,
+    BG_BASE,
     BG_PANEL,
     BLUE_FUNC,
     BORDER_CARD,
@@ -245,7 +244,7 @@ class _TwoDParamsWidget(QWidget):
     def _combo_style() -> str:
         return (
             f"QComboBox {{"
-            f"  background-color: {BG_DARK};"
+            f"  background-color: #FAFBFC;"
             f"  color: {TEXT_PRIMARY};"
             f"  border: 1px solid {BORDER_CARD};"
             f"  border-radius: 3px;"
@@ -255,7 +254,7 @@ class _TwoDParamsWidget(QWidget):
             f"}}"
             f"QComboBox:hover {{ border-color: {BLUE_FUNC}; }}"
             f"QComboBox QAbstractItemView {{"
-            f"  background-color: {BG_DARK};"
+            f"  background-color: #FAFBFC;"
             f"  color: {TEXT_PRIMARY};"
             f"  selection-background-color: {BLUE_FUNC};"
             f"}}"
@@ -265,7 +264,7 @@ class _TwoDParamsWidget(QWidget):
     def _spin_style() -> str:
         return (
             f"QSpinBox, QDoubleSpinBox {{"
-            f"  background-color: {BG_DARK};"
+            f"  background-color: #FAFBFC;"
             f"  color: {TEXT_PRIMARY};"
             f"  border: 1px solid {BORDER_CARD};"
             f"  border-radius: 3px;"
@@ -287,7 +286,7 @@ class _TwoDParamsWidget(QWidget):
             f"  width: 16px; height: 16px;"
             f"  border: 1px solid {BORDER_CARD};"
             f"  border-radius: 3px;"
-            f"  background-color: {BG_DARK};"
+            f"  background-color: #FAFBFC;"
             f"}}"
             f"QCheckBox::indicator:checked {{"
             f"  background-color: {BLUE_FUNC};"
@@ -347,17 +346,6 @@ class _ThreeDParamsWidget(QWidget):
         row = _PropertyRow("增益 (Gain)", gain_spin, "dB")
         layout.addWidget(row)
         self._rows["gain"] = gain_spin
-
-        # ---- 光机亮度 ----
-        brightness_spin = QSpinBox()
-        brightness_spin.setRange(0, 2000)
-        brightness_spin.setStyleSheet(_TwoDParamsWidget._spin_style())
-        brightness_spin.valueChanged.connect(
-            lambda v: self._camera.write_int_param(PARAM_3D_BRIGHTNESS, v)
-        )
-        row = _PropertyRow("光机亮度", brightness_spin)
-        layout.addWidget(row)
-        self._rows["brightness"] = brightness_spin
 
         # ---- 增强模式 ----
         enhance_check = QCheckBox()
@@ -452,8 +440,8 @@ class _ThreeDParamsWidget(QWidget):
         depth_row.setSpacing(6)
 
         depth_lower_spin = QSpinBox()
-        depth_lower_spin.setRange(0, 600)
-        depth_lower_spin.setValue(250)
+        depth_lower_spin.setRange(50, 349)
+        depth_lower_spin.setValue(200)
         depth_lower_spin.setSuffix(" mm")
         depth_lower_spin.setStyleSheet(_TwoDParamsWidget._spin_style())
         depth_lower_spin.valueChanged.connect(self._on_depth_lower_changed)
@@ -461,8 +449,8 @@ class _ThreeDParamsWidget(QWidget):
         depth_row.addWidget(depth_lower_spin)
 
         depth_upper_spin = QSpinBox()
-        depth_upper_spin.setRange(0, 600)
-        depth_upper_spin.setValue(350)
+        depth_upper_spin.setRange(251, 1000)
+        depth_upper_spin.setValue(300)
         depth_upper_spin.setSuffix(" mm")
         depth_upper_spin.setStyleSheet(_TwoDParamsWidget._spin_style())
         depth_upper_spin.valueChanged.connect(self._on_depth_upper_changed)
@@ -551,7 +539,7 @@ class _ThreeDParamsWidget(QWidget):
         return (
             f"QSlider::groove:horizontal {{"
             f"  height: 6px;"
-            f"  background-color: {BG_DARK};"
+            f"  background-color: #FAFBFC;"
             f"  border: 1px solid {BORDER_CARD};"
             f"  border-radius: 3px;"
             f"}}"
@@ -744,7 +732,7 @@ class VisionPage(QWidget):
         )
         self._result_table.setStyleSheet(
             f"QTableWidget {{"
-            f"  background-color: {BG_DARK};"
+            f"  background-color: #FFFFFF;"
             f"  color: {TEXT_PRIMARY};"
             f"  border: 1px solid {BORDER_CARD};"
             f"  border-radius: 4px;"
@@ -858,7 +846,7 @@ class VisionPage(QWidget):
             self._result_table.setItem(row, 0, QTableWidgetItem(f"{c.get('x', 0):.2f}"))
             self._result_table.setItem(row, 1, QTableWidgetItem(f"{c.get('y', 0):.2f}"))
             self._result_table.setItem(row, 2, QTableWidgetItem(f"{c.get('z', 0):.2f}"))
-            self._result_table.setItem(row, 3, QTableWidgetItem(f"{c.get('r', 0):.2f}"))
+            self._result_table.setItem(row, 3, QTableWidgetItem(f"{c.get('radius', 0):.2f}"))
 
         self._status_label.setText(f"检测到 {len(centers)} 个孔心")
         self._status_label.setStyleSheet(
@@ -927,9 +915,6 @@ class VisionPage(QWidget):
             rows = self._tab_3d._rows
             if "gain" in rows:
                 rows["gain"].setValue(params_3d.get("gain", 1))
-            if "brightness" in rows:
-                rows["brightness"].setValue(
-                    params_3d.get("light_engine_brightness", 800))
             if "enhance_mode" in rows:
                 rows["enhance_mode"].setChecked(
                     params_3d.get("enhance_mode", True))
@@ -1021,7 +1006,7 @@ class VisionPage(QWidget):
             f"  background-color: {BG_PANEL};"
             f"}}"
             f"QTabBar::tab {{"
-            f"  background-color: {BG_DARK};"
+            f"  background-color: #FAFBFC;"
             f"  color: {TEXT_SECONDARY};"
             f"  border: 1px solid {BORDER_CARD};"
             f"  padding: 6px 16px;"
